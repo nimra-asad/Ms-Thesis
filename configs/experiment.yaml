@@ -1,0 +1,9 @@
+seed: 42
+horizon_steps: 48
+forecast_origin_stride_steps: 48
+conformal_alpha: 0.10
+explanation_perturbations: 2
+explanation_seed: 42
+dr_evaluation_stride_days: 7
+dr_flexible_share: 0.20
+tariff_source: illustrative_simulated_pkr_per_kwh

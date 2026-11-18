@@ -1,0 +1,8 @@
+# These are candidate defaults only. Phase 8 selects thresholds using validation data.
+coverage_target: 0.70
+uncertainty_score: normalized_interval_width
+explanation_score: spearman_rank_consistency
+uncertainty_quantile: 0.70
+explanation_quantile: 0.30
+verify_uncertainty_quantile: 0.90
+verify_explanation_quantile: 0.10

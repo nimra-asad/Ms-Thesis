@@ -1,0 +1,1 @@
+"""Simulated demand-response optimization."""

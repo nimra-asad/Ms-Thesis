@@ -1,0 +1,19 @@
+seed: 42
+dataset_url: https://lei.lums.edu.pk/datasets/residential-energy-and-weather-data-pakistan.html
+raw_dir: data/raw
+energy_dir: data/raw/energy
+weather_dir: data/raw/weather
+processed_dir: data/processed
+timestamp_candidates: [timestamp, datetime, date_time, DateTime, time, Time]
+target_candidates: [whole_house, total, total_energy, energy, consumption, power, load]
+interval_minutes: 30
+horizon_steps: 48
+forecast_origin_stride_steps: 48
+history_context_steps: 336
+minimum_valid_minutes_per_interval: 24
+suspected_zero_run_hours: 24
+split_ratios:
+  train: 0.70
+  validation: 0.10
+  calibration: 0.10
+  test: 0.10
