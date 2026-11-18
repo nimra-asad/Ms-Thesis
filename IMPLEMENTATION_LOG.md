@@ -28,4 +28,12 @@
 - Generated validation and test TreeSHAP explanations, global mean-absolute importance, local top-ten explanations, and perturbation stability scores. Controller thresholds were selected from validation only; calibration residuals came from the independent calibration split.
 - Executed all four controller configurations; automation coverage on the test set was 100.0% ungated, 73.4% explanation-only, 30.4% dual-evidence, and 20.2% uncertainty-only. The uncertainty-only operating point matched dual-evidence validation coverage (53.36% vs. 53.41%); test coverage is separately reported.
 - CVXPY test simulations were sampled at one day in seven and ran only for ACT cases. The first cost-only optimizer saved money on evaluated cases, but peak reduction was negative and regret was negative because the oracle used mismatched feasibility caps. This invalidates the regret comparison. The script clips physically impossible negative forecasts only when passed to the optimizer; raw forecasts remain unchanged for accuracy scoring. User approval is pending to correct the oracle feasible set.
-- Test suite at the first full run: 18 tests passed; the final regression suite now passes 19 tests. `results/model_status.json` confirms all four model runs completed. `reports/experiment_results.md` and figures show actual metrics, including the DR caveat.
+- Test suite at the first full run: 18 tests passed; the final regression suite now passes 24 tests (including agentic coordinator unit tests). `results/model_status.json` confirms all four model runs completed. `reports/experiment_results.md` and figures show actual metrics, including the DR caveat.
+
+## Agentic coordinator — 2026-11-18
+
+- Continued from cached Dual-Evidence artifacts; did not retrain LightGBM, PatchTST, Chronos-2, or SHAP.
+- Confirmed no “Qwen 2.8” reference in the repo; README already named Qwen3-1.7B-Q4_K_M. Selected that local GGUF for free CPU tool calling via llama.cpp.
+- Added `DualEvidenceWorkflow` tools (inspect, X, VERIFY, ABSTAIN lock, ACT simulation, finalize), hardened OpenAI-compatible orchestration, and `scripts/run_agentic_orchestration.py`.
+- Unit tests: 24 passed (`unittest discover -s tests -v`).
+- Live run: `.venv/bin/python scripts/run_agentic_orchestration.py` against `http://127.0.0.1:18080/v1`. Measured sequence inspect → X → VERIFY → ABSTAIN → simulate → finalize; 994 origins routed ACT 289 / VERIFY 459 / ABSTAIN 246; 406/459 VERIFY checks passed; 48 sampled ACT DR cases; exact match to `decision_log_patchtst.csv` and 31.6296 PKR/case Dual-Evidence saving. Chapter 4: `reports/chapter4.md`.

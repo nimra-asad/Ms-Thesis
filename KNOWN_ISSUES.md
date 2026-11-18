@@ -22,5 +22,5 @@
 ## Runtime and optional components
 
 - Chronos-2 weights are downloaded on first use. On this Intel Mac, the run uses one Torch CPU thread to avoid an OpenMP stall. The weights are cached for offline reruns.
-- The optional external LLM narrative provider is disabled because no API key is configured. All quantitative outputs and decisions are computed by the local Python modules and the offline orchestrator.
+- The optional hosted LLM narrative provider is disabled. Local Qwen3-1.7B tool orchestration ran once over cached outputs; numeric ACT/VERIFY/ABSTAIN and DR values remain Python-computed (`reports/chapter4.md`).
 - Git commits could not be created because `.git` is read-only in this workspace.

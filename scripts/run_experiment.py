@@ -149,8 +149,13 @@ def _plot_results(metrics, configs):
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
     axes[0].bar(keys, [configs[k]["automation_coverage"] for k in keys], color="#7048e8")
     axes[0].set_ylim(0, 1); axes[0].set_title("Automation coverage")
-    axes[1].bar(keys, [configs[k].get("harmful_action_rate", 0) for k in keys], color="#e8590c")
-    axes[1].set_ylim(0, 1); axes[1].set_title("Harmful action rate among ACTs")
+    x = np.arange(len(keys)); width = .36
+    axes[1].bar(x-width/2, [configs[k].get("cost_increase_rate", 0) for k in keys],
+                width, label="Cost increase", color="#e8590c")
+    axes[1].bar(x+width/2, [configs[k].get("peak_increase_rate", 0) for k in keys],
+                width, label="Peak increase", color="#f08c00")
+    axes[1].set_xticks(x, keys); axes[1].set_ylim(0, 1)
+    axes[1].set_title("Cost / peak increase among ACTs"); axes[1].legend()
     for ax in axes: ax.tick_params(axis="x", rotation=25)
     fig.tight_layout(); fig.savefig("reports/figures/controller_comparison.png", dpi=160); plt.close(fig)
 
@@ -258,7 +263,10 @@ def run():
 
     records, config_decisions = [], {"ungated": [], "uncertainty_only": [],
                                     "explanation_only": [], "dual_evidence": []}
-    naive = predictions["seasonal_naive"]["test"]
+    secondary_name = "patchtst"
+    if predictions.get(secondary_name) is None:
+        raise RuntimeError("PatchTST is required for secondary verification but its predictions are unavailable")
+    secondary_test = predictions[secondary_name]["test"]
     lgb_test = predictions["lightgbm"]["test"]
     for i in range(len(windows["test"])):
         width, stable = float(test_width[i]), float(test_stability[i])
@@ -267,7 +275,7 @@ def run():
         exp = {"decision": "ACT" if stable >= thresholds.explanation_act_min else "ABSTAIN",
                "reason": "validation explanation stability threshold"}
         initial = call_tool("controller", width, stable, thresholds)
-        comparison = (call_tool("verification", lgb_test[i], naive[i],
+        comparison = (call_tool("verification", lgb_test[i], secondary_test[i],
                                thresholds.verification_relative_tolerance)
                       if initial["decision"] == "VERIFY" else None)
         outcome = call_tool("controller", width, stable, thresholds,
@@ -303,9 +311,10 @@ def run():
             decision = decisions[i]
             if decision["decision"] != "ACT":
                 continue
-            forecast_model = "lightgbm" if name != "ungated" else "lightgbm"
+            forecast_model = "lightgbm"
             result = call_tool("demand_response", predictions[forecast_model]["test"][i], windows["test"].y[i],
-                               flexible_share=float(ecfg["dr_flexible_share"]))
+                               flexible_share=float(ecfg["dr_flexible_share"]),
+                               peak_penalty_pkr_per_kw=float(ecfg.get("dr_peak_penalty_pkr_per_kw", 50.0)))
             dr_records.append({"origin": str(pd.Timestamp(origin64)), "config": name, **{
                 k: v for k, v in result.items() if k not in ("scheduled_flexible_kw", "optimized_actual_kw")}})
             dr_summaries.setdefault(name, []).append(result)
@@ -317,11 +326,11 @@ def run():
         dr = dr_summaries.get(name, [])
         dmetrics["automation_coverage"] = float(np.mean([x["decision"] == "ACT" for x in ds]))
         dmetrics["dr_evaluated_actions"] = len(dr)
-        dmetrics["harmful_action_rate"] = float(np.mean([x["harmful_action"] for x in dr])) if dr else 0.0
+        dmetrics["cost_increase_rate"] = float(np.mean([x["cost_increase"] for x in dr])) if dr else 0.0
+        dmetrics["peak_increase_rate"] = float(np.mean([x["peak_increase"] for x in dr])) if dr else 0.0
         dmetrics["mean_cost_saving_pkr"] = float(np.mean([x["cost_saving_pkr"] for x in dr])) if dr else 0.0
         dmetrics["mean_cost_saving_pct"] = float(np.mean([x["cost_saving_pct"] for x in dr])) if dr else 0.0
         dmetrics["mean_peak_reduction_kw"] = float(np.mean([x["peak_reduction_kw"] for x in dr])) if dr else 0.0
-        dmetrics["mean_regret_pkr"] = float(np.mean([x["regret_pkr"] for x in dr])) if dr else 0.0
         dr_summaries[name] = dmetrics
     _save_json(dr_summaries, "results/controller_metrics.json")
 
@@ -343,18 +352,19 @@ def run():
                      f"{clean['mae_kw'] if clean else float('nan'):.4f} | "
                      f"{flagged_metrics['mae_kw'] if flagged_metrics else float('nan'):.4f} |")
     lines += ["", "## Selective controller and DR comparison", "",
-      "| Configuration | Automation | Harmful action | Cost saved PKR | Peak reduction kW | Regret PKR | DR cases |", "|---|---:|---:|---:|---:|---:|---:|"]
+      "| Configuration | Automation | Cost-increase rate | Peak increase rate | Cost saved PKR | Peak reduction kW | DR cases |", "|---|---:|---:|---:|---:|---:|---:|"]
     for name, r in dr_summaries.items():
-        lines.append(f"| {name} | {r['automation_coverage']:.3f} | {r['harmful_action_rate']:.3f} | {r['mean_cost_saving_pkr']:.2f} | {r['mean_peak_reduction_kw']:.4f} | {r['mean_regret_pkr']:.2f} | {r['dr_evaluated_actions']} |")
+        lines.append(f"| {name} | {r['automation_coverage']:.3f} | {r.get('cost_increase_rate', 0.0):.3f} | {r.get('peak_increase_rate', 0.0):.3f} | {r['mean_cost_saving_pkr']:.2f} | {r['mean_peak_reduction_kw']:.4f} | {r['dr_evaluated_actions']} |")
     lines += ["", "## Execution status", "", "| Model | Status |", "|---|---|"]
     lines += [f"| {name} | {value['status']}: {value.get('error', value.get('model_id', 'executed'))} |" for name, value in statuses.items()]
-    lines += ["", "Tariffs and flexible-load share are illustrative simulation assumptions, not a utility tariff or measured appliance telemetry. DR optimization executes only for ACT decisions. A weekday fixed tariff is used throughout; no real appliance commands are issued.", "",
-      "Primary comparison is Dual-Evidence versus Uncertainty-Only. The Uncertainty-Only threshold is chosen on validation data to match Dual-Evidence validation coverage; test coverage is reported as observed.", ""]
+    lines += ["", "The DR objective combines illustrative energy cost with a configurable peak-demand penalty. Cost and peak outcomes are reported separately; increases are possible under forecast error. Tariffs and flexible-load share are simulation assumptions, not a utility tariff or measured appliance telemetry. DR optimization executes only for ACT decisions; no real appliance commands are issued. Numeric regret is withheld because the sampled forecast schedule and a fully aligned oracle were not evaluated under a common feasible set.", "",
+      "Primary frozen-threshold comparison is Dual-Evidence versus Uncertainty-Only. The Uncertainty-Only threshold is chosen on validation data to match Dual-Evidence validation coverage; test coverage is reported as observed. A separate post-hoc matched-coverage test risk--coverage diagnostic is in `reports/matched_coverage_test.md`.", ""]
     Path("reports/experiment_results.md").write_text("\n".join(lines), encoding="utf-8")
     _save_json({"models": statuses, "metrics": metric_rows, "controller": dr_summaries,
                 "zero_run_sensitivity": zero_sensitivity,
                 "n_windows": {k: len(v) for k, v in windows.items()},
                 "scope": "59 unique households; chronological 70/10/10/10; test untouched during fitting",
+                "secondary_verifier": secondary_name,
                 "experiment_config": ecfg},
                "results/experiment_summary.json")
     _save_json(tool_calls, "logs/agent_tool_calls.json")

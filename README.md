@@ -65,9 +65,32 @@ Outputs are written to `results/`, `models/`, `reports/`, and `logs/`. To run th
 python -m unittest discover -s tests -v
 ```
 
-### Optional LLM coordinator
+### Local pretrained LLM coordinator
 
-The research workflow runs without an LLM key. To enable the optional OpenAI-compatible report coordinator, copy `.env.example` to `.env` and set `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL`. The LLM receives computed summaries only; Python modules retain ownership of forecasts, SHAP, thresholds, controller decisions, and optimization.
+The experiment calculations remain reproducible without an LLM. This Intel Mac uses the CPU build of `llama.cpp`. Qwen3 1.7B is an open, pretrained model family with agent/tool capabilities and multilingual support. For a lighter local run, use the Q4_K_M quantization (about 1.28 GB). Download the macOS Intel binary and Qwen3 GGUF model:
+
+```bash
+curl --location 'https://github.com/ggml-org/llama.cpp/releases/download/b12502/llama-b12502-bin-macos-x64.tar.gz' --output /tmp/llama-macos-x64.tar.gz
+tar -xzf /tmp/llama-macos-x64.tar.gz -C /tmp
+curl --location 'https://huggingface.co/bartowski/Qwen_Qwen3-1.7B-GGUF/resolve/main/Qwen_Qwen3-1.7B-Q4_K_M.gguf' --output /tmp/Qwen3-1.7B-Q4_K_M.gguf
+```
+
+Start the local API server in one terminal:
+
+```bash
+/tmp/llama-b12502/llama-server --model /tmp/Qwen3-1.7B-Q4_K_M.gguf --alias Qwen3-1.7B-Q4_K_M --jinja --reasoning-format deepseek --host 127.0.0.1 --port 18080 --ctx-size 4096
+```
+
+In another terminal, copy `.env.example` to `.env` and run:
+
+```bash
+cp .env.example .env
+python scripts/run_agentic_orchestration.py
+```
+
+The coordinator uses the local OpenAI-compatible endpoint at `http://localhost:18080/v1` to choose among inspect, X-stage routing, VERIFY, ABSTAIN locking, ACT simulation, and finalize. It coordinates the frozen controller, conditional PatchTST verification, and ACT-only demand-response simulation over already-computed model outputs. Forecasts, SHAP, thresholds, ACT/VERIFY/ABSTAIN decisions, and optimization remain deterministic Python outputs; the LLM cannot change test thresholds or bypass the Python policy. Calls and results are recorded under `logs/agentic_tool_calls.json`, `results/agentic_orchestration.json`, and `reports/chapter4.md`.
+
+For an OpenAI-compatible hosted provider, override `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` in `.env`. That option may incur provider charges; the local llama.cpp setup does not send project data to a hosted model.
 
 ### Research scope and assumptions
 

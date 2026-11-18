@@ -13,13 +13,15 @@ def tariff_vector() -> np.ndarray:
 
 
 def optimize_day_ahead(forecast_kw, actual_kw, *, flexible_share: float = .20,
-                       max_shift_multiplier: float = 2.0,
-                       tariffs=None) -> dict:
+                       max_shift_multiplier: float = 2.0, tariffs=None,
+                       peak_penalty_pkr_per_kw: float = 50.0) -> dict:
     """Shift simulated evening appliance energy into a wider feasible window.
 
     Flexible energy is 20% of forecast demand during 17:00-22:00. It can move
     within 08:00-23:30, is energy-conserving, and is capped per slot at twice the
-    forecast average demand. Costs use a labeled illustrative tariff.
+    forecast demand. The forecast objective combines illustrative tariff cost
+    with a configurable penalty on maximum half-hour demand. Realized cost and
+    peak changes are measured separately because forecast error can reverse either.
     """
     forecast = np.asarray(forecast_kw, dtype=float).reshape(-1)
     actual = np.asarray(actual_kw, dtype=float).reshape(-1)
@@ -31,6 +33,8 @@ def optimize_day_ahead(forecast_kw, actual_kw, *, flexible_share: float = .20,
     forecast = np.maximum(forecast, 0.0)
     if not 0 <= flexible_share <= 1:
         raise ValueError("flexible_share must be in [0, 1]")
+    if not np.isfinite(peak_penalty_pkr_per_kw) or peak_penalty_pkr_per_kw < 0:
+        raise ValueError("peak_penalty_pkr_per_kw must be finite and non-negative")
     tariff = np.asarray(tariffs if tariffs is not None else tariff_vector(), dtype=float)
     if tariff.shape != (48,):
         raise ValueError("tariffs must contain 48 half-hour prices")
@@ -40,13 +44,16 @@ def optimize_day_ahead(forecast_kw, actual_kw, *, flexible_share: float = .20,
     baseline_flexible = forecast * flexible_share * source_mask
     energy = float(baseline_flexible.sum())
     if energy <= 1e-9:
-        return _no_shift(forecast, actual, tariff)
+        return _no_shift(forecast, actual, tariff, peak_penalty_pkr_per_kw)
     schedule = cp.Variable(48, nonneg=True)
     constraints = [cp.sum(schedule) == energy,
                    schedule <= np.maximum(forecast * max_shift_multiplier, 0.05),
                    schedule[~allowed_mask] == 0]
-    objective = cp.Minimize(cp.sum(cp.multiply(tariff, forecast - baseline_flexible + schedule)) * .5 +
-                            .01 * cp.norm1(schedule[1:] - schedule[:-1]))
+    planned_load = forecast - baseline_flexible + schedule
+    objective = cp.Minimize(
+        cp.sum(cp.multiply(tariff, planned_load)) * .5
+        + float(peak_penalty_pkr_per_kw) * cp.max(planned_load)
+        + .01 * cp.norm1(schedule[1:] - schedule[:-1]))
     problem = cp.Problem(objective, constraints)
     try:
         problem.solve(solver="CLARABEL")
@@ -60,43 +67,32 @@ def optimize_day_ahead(forecast_kw, actual_kw, *, flexible_share: float = .20,
     applied = planned * (actual_flexible_energy / energy)
     actual_source_flex = actual * flexible_share * source_mask
     post = actual - actual_source_flex + applied
-    oracle = _solve_oracle(actual, actual_flexible_energy, tariff, allowed_mask, max_shift_multiplier)
     base_cost = float(np.dot(actual, tariff) * .5)
     post_cost = float(np.dot(post, tariff) * .5)
-    oracle_cost = float(np.dot(oracle, tariff) * .5)
-    return {"status": problem.status, "forecast_cost_pkr": float(problem.value),
+    peak_reduction = float(actual.max() - post.max())
+    return {"status": problem.status,
+            "forecast_energy_cost_pkr": float(np.dot(planned_load.value, tariff) * .5),
+            "forecast_peak_kw": float(np.max(planned_load.value)),
+            "peak_penalty_pkr_per_kw": float(peak_penalty_pkr_per_kw),
             "baseline_actual_cost_pkr": base_cost, "optimized_actual_cost_pkr": post_cost,
-            "oracle_actual_cost_pkr": oracle_cost,
             "cost_saving_pkr": base_cost-post_cost,
             "cost_saving_pct": 100*(base_cost-post_cost)/base_cost if base_cost else 0.0,
-            "peak_reduction_kw": float(actual.max()-post.max()),
-            "regret_pkr": float(post_cost-oracle_cost),
-            "harmful_action": bool(post_cost > base_cost + 1e-6),
+            "peak_reduction_kw": peak_reduction,
+            "cost_increase": bool(post_cost > base_cost + 1e-6),
+            "peak_increase": bool(peak_reduction < -1e-6),
             "flex_energy_kwh": actual_flexible_energy*.5,
             "scheduled_flexible_kw": applied.tolist(), "optimized_actual_kw": post.tolist()}
 
 
-def _solve_oracle(actual, energy, tariff, allowed_mask, multiplier):
-    if energy <= 1e-9:
-        return actual.copy()
-    shift = cp.Variable(48, nonneg=True)
-    constraints = [cp.sum(shift) == energy,
-                   shift <= np.maximum(actual * multiplier, .05), shift[~allowed_mask] == 0]
-    problem = cp.Problem(cp.Minimize(cp.sum(cp.multiply(tariff, actual + shift -
-                                                        actual*.20*((np.arange(48)/2>=17)&(np.arange(48)/2<22))))*.5),
-                         constraints)
-    problem.solve(solver="CLARABEL")
-    if shift.value is None:
-        return actual.copy()
-    source = actual * .20 * ((np.arange(48)/2 >= 17) & (np.arange(48)/2 < 22))
-    return actual - source + np.asarray(shift.value).ravel()
-
-
-def _no_shift(forecast, actual, tariff):
+def _no_shift(forecast, actual, tariff, peak_penalty_pkr_per_kw):
     cost = float(np.dot(actual, tariff)*.5)
-    return {"status": "no_flexible_energy", "forecast_cost_pkr": float(np.dot(forecast, tariff)*.5),
+    return {"status": "no_flexible_energy",
+            "forecast_energy_cost_pkr": float(np.dot(forecast, tariff)*.5),
+            "forecast_peak_kw": float(np.max(forecast)),
             "baseline_actual_cost_pkr": cost, "optimized_actual_cost_pkr": cost,
-            "oracle_actual_cost_pkr": cost, "cost_saving_pkr": 0.0, "cost_saving_pct": 0.0,
-            "peak_reduction_kw": 0.0, "regret_pkr": 0.0, "harmful_action": False,
+            "cost_saving_pkr": 0.0, "cost_saving_pct": 0.0,
+            "peak_reduction_kw": 0.0,
+            "peak_penalty_pkr_per_kw": float(peak_penalty_pkr_per_kw),
+            "cost_increase": False, "peak_increase": False,
             "flex_energy_kwh": 0.0, "scheduled_flexible_kw": [0.0]*48,
             "optimized_actual_kw": actual.tolist()}

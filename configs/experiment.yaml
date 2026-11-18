@@ -7,3 +7,4 @@ explanation_seed: 42
 dr_evaluation_stride_days: 7
 dr_flexible_share: 0.20
 tariff_source: illustrative_simulated_pkr_per_kwh
+dr_peak_penalty_pkr_per_kw: 50.0
